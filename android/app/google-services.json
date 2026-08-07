@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1074015098391",
+    "project_id": "territory-wars-a03ab",
+    "storage_bucket": "territory-wars-a03ab.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1074015098391:android:bf7d802ccb3e3a3259ee52",
+        "android_client_info": {
+          "package_name": "com.territorywars.territory_wars"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBB62MH1kGIYK-IKmDxWluN1ArGKQN8ZzA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
