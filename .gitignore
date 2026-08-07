@@ -101,7 +101,3 @@ lib/generated_plugin_registrant.dart
 !.env.example
 secrets.dart
 *.pem
-
-# Profanity blocklist. Kept out of the public repo on purpose so the slur list
-# isn't sitting in the commit history. Remove this line to ship the file.
-lib/utils/nickname_validator.dart
