@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/player_service.dart';
 import '../utils/nickname_validator.dart';
 import 'map_screen.dart';
 
@@ -18,7 +19,10 @@ const List<Color> kPresetColors = [
 ];
 
 class StartScreen extends StatefulWidget {
-  const StartScreen({super.key});
+  const StartScreen({super.key, this.playerService});
+
+  // Null in widget tests, where there's no Firebase to talk to.
+  final PlayerService? playerService;
 
   @override
   State<StartScreen> createState() => _StartScreenState();
@@ -29,6 +33,13 @@ class _StartScreenState extends State<StartScreen> {
 
   int? _selectedColorIndex;
   String? _errorText;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExistingPlayer();
+  }
 
   @override
   void dispose() {
@@ -37,9 +48,34 @@ class _StartScreenState extends State<StartScreen> {
   }
 
   bool get _canStart =>
-      _nicknameController.text.trim().isNotEmpty && _selectedColorIndex != null;
+      !_saving &&
+      _nicknameController.text.trim().isNotEmpty &&
+      _selectedColorIndex != null;
 
-  void _onStartPressed() {
+  // If this device already has a player saved, show their name and color
+  // instead of an empty form.
+  Future<void> _loadExistingPlayer() async {
+    final service = widget.playerService;
+    final uid = service?.uid;
+    if (service == null || uid == null) return;
+
+    try {
+      final player = await service.load(uid);
+      if (player == null || !mounted) return;
+
+      final index = kPresetColors.indexWhere(
+        (c) => c.toARGB32() == player.color.toARGB32(),
+      );
+      setState(() {
+        _nicknameController.text = player.nickname;
+        if (index != -1) _selectedColorIndex = index;
+      });
+    } catch (e) {
+      debugPrint('Could not load existing player: $e');
+    }
+  }
+
+  Future<void> _onStartPressed() async {
     final error = NicknameValidator.validate(_nicknameController.text);
     if (error != null) {
       setState(() => _errorText = error);
@@ -50,9 +86,41 @@ class _StartScreenState extends State<StartScreen> {
       return;
     }
 
-    final nickname = _nicknameController.text.trim();
-    final color = kPresetColors[_selectedColorIndex!];
+    var nickname = _nicknameController.text.trim();
+    var color = kPresetColors[_selectedColorIndex!];
 
+    final service = widget.playerService;
+    final uid = service?.uid;
+    if (service != null && uid != null) {
+      setState(() {
+        _saving = true;
+        _errorText = null;
+      });
+      try {
+        // Returns the stored player if there already is one for this uid.
+        final player = await service.createIfAbsent(
+          uid: uid,
+          nickname: nickname,
+          color: color,
+        );
+        nickname = player.nickname;
+        color = player.color;
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _saving = false;
+          _errorText = "Couldn't save your player. Check your connection.";
+        });
+        return;
+      }
+      if (!mounted) return;
+      setState(() => _saving = false);
+    } else if (service != null && uid == null) {
+      setState(() => _errorText = "You're not signed in yet. Try again.");
+      return;
+    }
+
+    if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MapScreen(nickname: nickname, trailColor: color),
@@ -122,7 +190,13 @@ class _StartScreenState extends State<StartScreen> {
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
-                    child: const Text('Start'),
+                    child: _saving
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Start'),
                   ),
                 ],
               ),
