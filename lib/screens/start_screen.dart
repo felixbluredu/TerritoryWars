@@ -40,12 +40,6 @@ class _StartScreenState extends State<StartScreen> {
   bool _saving = false;
 
   @override
-  void initState() {
-    super.initState();
-    _loadExistingPlayer();
-  }
-
-  @override
   void dispose() {
     _nicknameController.dispose();
     super.dispose();
@@ -56,29 +50,9 @@ class _StartScreenState extends State<StartScreen> {
       _nicknameController.text.trim().isNotEmpty &&
       _selectedColorIndex != null;
 
-  // If this device already has a player saved, show their name and color
-  // instead of an empty form.
-  Future<void> _loadExistingPlayer() async {
-    final service = widget.playerService;
-    final uid = service?.uid;
-    if (service == null || uid == null) return;
-
-    try {
-      final player = await service.load(uid);
-      if (player == null || !mounted) return;
-
-      final index = kPresetColors.indexWhere(
-        (c) => c.toARGB32() == player.color.toARGB32(),
-      );
-      setState(() {
-        _nicknameController.text = player.nickname;
-        if (index != -1) _selectedColorIndex = index;
-      });
-    } catch (e) {
-      debugPrint('Could not load existing player: $e');
-    }
-  }
-
+  // No pre-fill here any more: LaunchScreen already checked for a saved player
+  // and sent them straight to the map, so this screen only ever shows to
+  // someone who doesn't have one yet.
   Future<void> _onStartPressed() async {
     final error = NicknameValidator.validate(_nicknameController.text);
     if (error != null) {
@@ -125,7 +99,9 @@ class _StartScreenState extends State<StartScreen> {
     }
 
     if (!mounted) return;
-    Navigator.of(context).push(
+    // Replace, not push: once the player is saved, this screen is done for
+    // good, and back shouldn't return to it.
+    Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => MapScreen(
           nickname: nickname,

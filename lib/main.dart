@@ -2,7 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
 import 'firebase_options.dart';
-import 'screens/start_screen.dart';
+import 'screens/launch_screen.dart';
 import 'services/player_service.dart';
 import 'services/territory_service.dart';
 
@@ -48,7 +48,7 @@ class TerritoryWarsApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: StartScreen(
+      home: LaunchScreen(
         playerService: playerService,
         territoryService: territoryService,
       ),
