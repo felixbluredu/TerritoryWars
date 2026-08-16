@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/player_service.dart';
+import '../services/territory_service.dart';
 import '../utils/nickname_validator.dart';
 import 'map_screen.dart';
 
@@ -19,10 +20,13 @@ const List<Color> kPresetColors = [
 ];
 
 class StartScreen extends StatefulWidget {
-  const StartScreen({super.key, this.playerService});
+  const StartScreen({super.key, this.playerService, this.territoryService});
 
-  // Null in widget tests, where there's no Firebase to talk to.
+  // Both null in widget tests, where there's no Firebase to talk to.
   final PlayerService? playerService;
+
+  // Passed straight through to the map, which is what uses it.
+  final TerritoryService? territoryService;
 
   @override
   State<StartScreen> createState() => _StartScreenState();
@@ -123,7 +127,12 @@ class _StartScreenState extends State<StartScreen> {
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => MapScreen(nickname: nickname, trailColor: color),
+        builder: (_) => MapScreen(
+          nickname: nickname,
+          trailColor: color,
+          territoryService: widget.territoryService,
+          ownerUid: uid,
+        ),
       ),
     );
   }

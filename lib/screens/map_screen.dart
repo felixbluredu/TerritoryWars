@@ -1,9 +1,17 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+
+import '../models/territory.dart';
+import '../services/territory_service.dart';
+
+// Prefix on every territory-saving log line, so Logcat can be filtered down to
+// just this flow.
+const String _logTag = '[TW-TERRITORY]';
 
 // Map that follows the player's location. Nickname and color come from the
 // start screen.
@@ -12,10 +20,17 @@ class MapScreen extends StatefulWidget {
     super.key,
     required this.nickname,
     required this.trailColor,
+    this.territoryService,
+    this.ownerUid,
   });
 
   final String nickname;
   final Color trailColor;
+
+  // Both null in widget tests, and ownerUid is null if sign-in failed. Without
+  // them the map still works, captured loops just aren't saved or restored.
+  final TerritoryService? territoryService;
+  final String? ownerUid;
 
   @override
   State<MapScreen> createState() => _MapScreenState();
@@ -47,9 +62,9 @@ class _MapScreenState extends State<MapScreen>
   // The walked path, one point per GPS fix.
   final List<LatLng> _trail = [];
 
-  // Every closed loop, drawn as a filled polygon. TODO: save these so they
-  // survive a restart.
-  final List<List<LatLng>> _territories = [];
+  // Every closed loop, drawn as a filled polygon. Loaded from Firestore on
+  // open, and appended to as new loops close.
+  final List<Territory> _territories = [];
 
   // Set once we're far enough from the start for a return to count as a loop.
   bool _hasLeftStart = false;
@@ -70,7 +85,35 @@ class _MapScreenState extends State<MapScreen>
       curve: Curves.easeInOut,
     );
     _moveController.addListener(_onMoveTick);
+    // (0) What the map was handed. If either is NULL here, no loop will ever
+    // save and the reason is upstream, in the start screen.
+    debugPrint(
+      '$_logTag map opened with '
+      'territoryService=${widget.territoryService == null ? "NULL" : "ok"}, '
+      'ownerUid=${widget.ownerUid ?? "NULL"}',
+    );
+    _loadSavedTerritories();
     _startTracking();
+  }
+
+  // Areas claimed in earlier sessions. Runs alongside the location setup so a
+  // slow query doesn't hold up the map.
+  Future<void> _loadSavedTerritories() async {
+    final service = widget.territoryService;
+    final uid = widget.ownerUid;
+    if (service == null || uid == null) return;
+
+    try {
+      final saved = await service.loadForOwner(uid);
+      if (!mounted || saved.isEmpty) return;
+      setState(() => _territories.insertAll(0, saved));
+    } catch (e) {
+      debugPrint('Could not load saved territories: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't load your saved territories.")),
+      );
+    }
   }
 
   @override
@@ -195,6 +238,13 @@ class _MapScreenState extends State<MapScreen>
     if (!_hasLeftStart) {
       if (metersFromStart >= _minLeaveDistanceMeters) {
         _hasLeftStart = true;
+        // (0b) Half of loop detection. Without this line a loop can never
+        // close, however far you walk.
+        debugPrint(
+          '$_logTag left the start '
+          '(${metersFromStart.toStringAsFixed(1)} m away), '
+          'a return within $_loopCloseThresholdMeters m now counts as a loop',
+        );
       }
       return false;
     }
@@ -204,6 +254,12 @@ class _MapScreenState extends State<MapScreen>
 
   // Shows the message and resets the trail so the next loop starts here.
   void _onLoopClosed(LatLng current) {
+    // (1) Loop detected.
+    debugPrint(
+      '$_logTag loop closed with ${_trail.length} points, '
+      'ending at ${current.latitude}, ${current.longitude}',
+    );
+
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -213,15 +269,80 @@ class _MapScreenState extends State<MapScreen>
         ),
       );
 
+    // Copy the points out before clearing the trail.
+    final territory = Territory(
+      ownerUid: widget.ownerUid ?? '',
+      nickname: widget.nickname,
+      color: widget.trailColor,
+      points: List<LatLng>.from(_trail),
+    );
+
     setState(() {
-      // Copy the points out before clearing the trail.
-      _territories.add(List<LatLng>.from(_trail));
+      _territories.add(territory);
       _trail
         ..clear()
         ..add(current);
       _hasLeftStart = false;
       _currentLocation = current;
     });
+
+    // Drawn already, so the write happens in the background.
+    _saveTerritory(territory);
+  }
+
+  Future<void> _saveTerritory(Territory territory) async {
+    final service = widget.territoryService;
+    final uid = widget.ownerUid;
+
+    // (2) Everything the write needs, named so a null one is obvious.
+    debugPrint(
+      '$_logTag about to save: '
+      'service=${service == null ? "NULL" : "ok"}, '
+      'ownerUid=${uid ?? "NULL"}, '
+      'nickname=${territory.nickname}, '
+      'color=${territory.color.toARGB32()}, '
+      'points=${territory.points.length}, '
+      'collection=${TerritoryService.collectionName}',
+    );
+
+    if (service == null || uid == null) {
+      debugPrint(
+        '$_logTag SKIPPED the save, nothing was written. '
+        '${service == null ? "territoryService is null. " : ""}'
+        '${uid == null ? "ownerUid is null." : ""}',
+      );
+      return;
+    }
+
+    try {
+      final saved = await service.save(territory);
+      // (3a) Only prints once Firestore has accepted the write.
+      debugPrint('$_logTag SAVED, document id ${saved.id}');
+    } on FirebaseException catch (e, stack) {
+      // (3b) Firestore's own failures, where the code is the useful part:
+      // permission-denied, unavailable, invalid-argument, unauthenticated.
+      debugPrint(
+        '$_logTag SAVE FAILED, FirebaseException '
+        'code=${e.code} plugin=${e.plugin} message=${e.message}',
+      );
+      debugPrintStack(stackTrace: stack, label: '$_logTag save');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't save that territory. Check your connection."),
+        ),
+      );
+    } catch (e, stack) {
+      // (3c) Anything else, e.g. a bad value in the map we're writing.
+      debugPrint('$_logTag SAVE FAILED, ${e.runtimeType}: $e');
+      debugPrintStack(stackTrace: stack, label: '$_logTag save');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't save that territory. Check your connection."),
+        ),
+      );
+    }
   }
 
   void _onMoveTick() {
@@ -293,9 +414,9 @@ class _MapScreenState extends State<MapScreen>
                 polygons: [
                   for (final area in _territories)
                     Polygon(
-                      points: area,
-                      color: widget.trailColor.withValues(alpha: 0.5),
-                      borderColor: widget.trailColor,
+                      points: area.points,
+                      color: area.color.withValues(alpha: 0.5),
+                      borderColor: area.color,
                       borderStrokeWidth: 3,
                     ),
                 ],

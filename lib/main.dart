@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'firebase_options.dart';
 import 'screens/start_screen.dart';
 import 'services/player_service.dart';
+import 'services/territory_service.dart';
 
 Future<void> main() async {
   // Firebase needs the bindings up before it can initialize.
@@ -23,14 +24,20 @@ Future<void> main() async {
     debugPrint('Anonymous sign-in failed: $e');
   }
 
-  runApp(TerritoryWarsApp(playerService: playerService));
+  runApp(
+    TerritoryWarsApp(
+      playerService: playerService,
+      territoryService: TerritoryService(),
+    ),
+  );
 }
 
 class TerritoryWarsApp extends StatelessWidget {
-  const TerritoryWarsApp({super.key, this.playerService});
+  const TerritoryWarsApp({super.key, this.playerService, this.territoryService});
 
-  // Null in widget tests, where there's no Firebase to talk to.
+  // Both null in widget tests, where there's no Firebase to talk to.
   final PlayerService? playerService;
+  final TerritoryService? territoryService;
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +48,10 @@ class TerritoryWarsApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: StartScreen(playerService: playerService),
+      home: StartScreen(
+        playerService: playerService,
+        territoryService: territoryService,
+      ),
     );
   }
 }
