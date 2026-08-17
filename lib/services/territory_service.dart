@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/territory.dart';
 
@@ -19,6 +20,25 @@ class TerritoryService {
   Future<Territory> save(Territory territory) async {
     final ref = await _territories.add(territory.toMap());
     return territory.copyWith(id: ref.id);
+  }
+
+  // Every territory in the game, from every player, re-emitted whenever the
+  // collection changes. Firestore reports local writes straight away, so a loop
+  // you just closed shows up without waiting for the server.
+  Stream<List<Territory>> watchAll() {
+    return _territories.snapshots().map((snapshot) {
+      final territories = <Territory>[];
+      for (final doc in snapshot.docs) {
+        try {
+          territories.add(Territory.fromMap(doc.data(), id: doc.id));
+        } catch (e) {
+          // One malformed document shouldn't blank out everyone's map, and
+          // this collection has other players' writes in it.
+          debugPrint('Skipping unreadable territory ${doc.id}: $e');
+        }
+      }
+      return territories;
+    });
   }
 
   // Every territory this uid has claimed, oldest first.

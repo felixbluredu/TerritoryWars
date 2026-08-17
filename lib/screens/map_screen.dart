@@ -62,9 +62,31 @@ class _MapScreenState extends State<MapScreen>
   // The walked path, one point per GPS fix.
   final List<LatLng> _trail = [];
 
-  // Every closed loop, drawn as a filled polygon. Loaded from Firestore on
-  // open, and appended to as new loops close.
-  final List<Territory> _territories = [];
+  // Every player's territories, keyed by document id, kept in sync with the
+  // "territories" collection for as long as this screen is open.
+  final Map<String, Territory> _saved = {};
+
+  // Loops closed on this device whose document hasn't come back through the
+  // listener yet. Drawn straight away so the fill doesn't lag the walk, and
+  // dropped once the same territory arrives from Firestore.
+  final List<Territory> _pending = [];
+
+  StreamSubscription<List<Territory>>? _territorySub;
+
+  // Oldest first, so newer claims paint over older ones.
+  List<Territory> get _territories {
+    final all = [..._saved.values, ..._pending];
+    all.sort((a, b) {
+      final aTime = a.createdAt;
+      final bTime = b.createdAt;
+      // A territory still waiting on its server timestamp is the newest thing
+      // on the map, so it sorts last.
+      if (aTime == null) return bTime == null ? 0 : 1;
+      if (bTime == null) return -1;
+      return aTime.compareTo(bTime);
+    });
+    return all;
+  }
 
   // Set once we're far enough from the start for a return to count as a loop.
   bool _hasLeftStart = false;
@@ -92,33 +114,50 @@ class _MapScreenState extends State<MapScreen>
       'territoryService=${widget.territoryService == null ? "NULL" : "ok"}, '
       'ownerUid=${widget.ownerUid ?? "NULL"}',
     );
-    _loadSavedTerritories();
+    _watchTerritories();
     _startTracking();
   }
 
-  // Areas claimed in earlier sessions. Runs alongside the location setup so a
-  // slow query doesn't hold up the map.
-  Future<void> _loadSavedTerritories() async {
+  // Everyone's claimed areas, kept live. No uid needed, this is the whole
+  // collection, and it runs alongside the location setup so a slow first
+  // snapshot doesn't hold up the map.
+  void _watchTerritories() {
     final service = widget.territoryService;
-    final uid = widget.ownerUid;
-    if (service == null || uid == null) return;
+    if (service == null) return;
 
-    try {
-      final saved = await service.loadForOwner(uid);
-      if (!mounted || saved.isEmpty) return;
-      setState(() => _territories.insertAll(0, saved));
-    } catch (e) {
-      debugPrint('Could not load saved territories: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't load your saved territories.")),
-      );
-    }
+    _territorySub = service.watchAll().listen(
+      (territories) {
+        if (!mounted) return;
+        setState(() {
+          _saved
+            ..clear()
+            ..addEntries(
+              territories
+                  .where((t) => t.id != null)
+                  .map((t) => MapEntry(t.id!, t)),
+            );
+          // Anything of ours that has now come back through Firestore is no
+          // longer pending, and drawing both would double the fill.
+          _pending.removeWhere(
+            (t) => t.id != null && _saved.containsKey(t.id),
+          );
+        });
+        debugPrint('$_logTag now showing ${_saved.length} saved territories');
+      },
+      onError: (Object e) {
+        debugPrint('$_logTag territory stream error: $e');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't load territories.")),
+        );
+      },
+    );
   }
 
   @override
   void dispose() {
     _positionSub?.cancel();
+    _territorySub?.cancel();
     _moveController.dispose();
     super.dispose();
   }
@@ -278,7 +317,7 @@ class _MapScreenState extends State<MapScreen>
     );
 
     setState(() {
-      _territories.add(territory);
+      _pending.add(territory);
       _trail
         ..clear()
         ..add(current);
@@ -318,6 +357,20 @@ class _MapScreenState extends State<MapScreen>
       final saved = await service.save(territory);
       // (3a) Only prints once Firestore has accepted the write.
       debugPrint('$_logTag SAVED, document id ${saved.id}');
+
+      if (!mounted) return;
+      setState(() {
+        final index = _pending.indexWhere((t) => identical(t, territory));
+        if (index == -1) return;
+        if (_saved.containsKey(saved.id)) {
+          // The listener beat us to it, so the drawn copy is redundant.
+          _pending.removeAt(index);
+        } else {
+          // Tag it with the id instead, so the listener can retire it when the
+          // document does arrive.
+          _pending[index] = saved;
+        }
+      });
     } on FirebaseException catch (e, stack) {
       // (3b) Firestore's own failures, where the code is the useful part:
       // permission-denied, unavailable, invalid-argument, unauthenticated.
@@ -395,6 +448,8 @@ class _MapScreenState extends State<MapScreen>
     }
 
     final location = _currentLocation!;
+    // Built once per frame, since the getter sorts every time it's read.
+    final territories = _territories;
     return Stack(
       children: [
         FlutterMap(
@@ -409,12 +464,14 @@ class _MapScreenState extends State<MapScreen>
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.territorywars.territory_wars',
             ),
-            if (_territories.isNotEmpty)
+            if (territories.isNotEmpty)
               PolygonLayer(
                 polygons: [
-                  for (final area in _territories)
+                  for (final area in territories)
                     Polygon(
                       points: area.points,
+                      // Each territory's own saved color, so other players'
+                      // land draws in theirs, not mine.
                       color: area.color.withValues(alpha: 0.5),
                       borderColor: area.color,
                       borderStrokeWidth: 3,
